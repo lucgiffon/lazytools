@@ -53,7 +53,8 @@ def ordered_load(stream, Loader=yaml.Loader, object_pairs_hook=OrderedDict):
 
 class LazygridParser:
     def __init__(self, path):
-        self.lazyfilename = "/".join(path.split("/")[-3:]).split(".")[0]
+        self.input_path = path
+        self.lazyfilename = "/".join(str(path).split("/")[-3:]).split(".")[0]
         with open(path) as f:
             self.dataMap = ordered_load(f)
         self.final_cmd_lines = []
@@ -178,6 +179,11 @@ class LazygridParser:
         for line in self.final_cmd_lines:
             print(line)
 
+    def write(self):
+        with open(self.input_path.parent / (self.input_path.stem + ".grid"), 'w') as of:
+            for line in self.final_cmd_lines:
+                of.write(line + "\n")
+
     def count(self):
         print(len(self.final_cmd_lines))
 
@@ -185,12 +191,15 @@ class LazygridParser:
 @click.command()
 @click.argument("lazyfile", type=click_pathlib.Path(exists=True, dir_okay=True, resolve_path=True))
 @click.option("--count", "-c", is_flag=True, help="Count the number of parameter lines.")
-def main(lazyfile, count):
-    abspath_lazyfile = str(lazyfile.absolute())
+@click.option("--write", "-w", is_flag=True, help="Write output file next to input lazyfile with .grid extension.")
+def main(lazyfile, count, write):
+    abspath_lazyfile = lazyfile.absolute()
     lazyfile_parser = LazygridParser(abspath_lazyfile)
-    if not count:
+    if not write:
         lazyfile_parser.print()
     else:
+        lazyfile_parser.write()
+    if count:
         lazyfile_parser.count()
 
 
