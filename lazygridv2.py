@@ -23,18 +23,11 @@ A rule can have keyword parameters or simple parameters:
 
 ["--this-is-a-simple-boolean-parameter", "--this-is-an-other-simple-boolean-parameter"]
 
-
-Usage:
-    lazygrid -l lazyfile
-
-Options:
-    -l --lazyfile lazyfile          The input configuration yml file.
 """
-
+import click_pathlib
 import yaml
+import click
 from collections import OrderedDict, defaultdict
-import os
-from docopt import docopt
 
 # these are not used in the code but are necessary for evaluation of parameters
 import numpy as np
@@ -59,10 +52,8 @@ def ordered_load(stream, Loader=yaml.Loader, object_pairs_hook=OrderedDict):
 
 
 class LazygridParser:
-    LAZYFILENAME = None
-
     def __init__(self, path):
-        self.LAZYFILENAME = "/".join(path.split("/")[-3:]).split(".")[0]
+        self.lazyfilename = "/".join(path.split("/")[-3:]).split(".")[0]
         with open(path) as f:
             self.dataMap = ordered_load(f)
         self.final_cmd_lines = []
@@ -102,7 +93,7 @@ class LazygridParser:
             for key_arg, raw_value_arg in value.items():
                 # there is a lot of computation being repeated between iteration here but it shouldn't
                 # cost so much
-                formated_value_arg = (f"" + str(raw_value_arg)).format(LAZYFILE=self.LAZYFILENAME)
+                formated_value_arg = (f"" + str(raw_value_arg)).format(LAZYFILE=self.lazyfilename)
                 iterable_value_arg = eval(str(formated_value_arg))
 
                 # check if the number of coefficients is consistent
@@ -188,9 +179,10 @@ class LazygridParser:
             print(line)
 
 
-def main():
-    arguments = docopt(__doc__)
-    abspath_lazyfile = os.path.abspath(arguments["--lazyfile"])
+@click.command()
+@click.argument("lazyfile", type=click_pathlib.Path(exists=True, dir_okay=True, resolve_path=True))
+def main(lazyfile):
+    abspath_lazyfile = str(lazyfile.absolute())
     lazyfile_parser = LazygridParser(abspath_lazyfile)
     lazyfile_parser.print()
 
