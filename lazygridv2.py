@@ -178,13 +178,20 @@ class LazygridParser:
         for line in self.final_cmd_lines:
             print(line)
 
+    def count(self):
+        print(len(self.final_cmd_lines))
+
 
 @click.command()
 @click.argument("lazyfile", type=click_pathlib.Path(exists=True, dir_okay=True, resolve_path=True))
-def main(lazyfile):
+@click.option("--count", "-c", is_flag=True, help="Count the number of parameter lines.")
+def main(lazyfile, count):
     abspath_lazyfile = str(lazyfile.absolute())
     lazyfile_parser = LazygridParser(abspath_lazyfile)
-    lazyfile_parser.print()
+    if not count:
+        lazyfile_parser.print()
+    else:
+        lazyfile_parser.count()
 
 
 if __name__ == "__main__":
