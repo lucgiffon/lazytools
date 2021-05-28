@@ -32,135 +32,16 @@ Options:
 """
 
 import yaml
-from collections import OrderedDict
-from pprint import pprint
-import copy
+from collections import OrderedDict, defaultdict
+import os
+from docopt import docopt
+
+# these are not used in the code but are necessary for evaluation of parameters
 import numpy as np
 import math
-import os
-import time
 import random
-
-# todo specify external modules (ex numpy/maths) in the yaml file
-from docopt import docopt
 from pathlib import Path
-
-LAZYFILENAME = None
-
-
-def add_previous_rule_to_current_cmd(current_cmd, previous_rule_cmd_lines):
-    tmp_cmd_line_case = []
-    for cmd_line_to_add in previous_rule_cmd_lines:
-        tmp_cmd_line_case.append(" ".join([current_cmd, cmd_line_to_add]))
-    return tmp_cmd_line_case
-
-
-def build_arguments_combinations_of_rule(rulename, rule_content, dct_current_argument_combinations_by_rule):
-    cmd_line_case = [""]  # the initial argument combination is just the empty argument combination
-    # this will contain all the "sub command lines" of the rule
-    for key, value in rule_content.items():
-        # each new item in the rule will be appended to all
-        # the previously constructed argument combinations of the rule
-
-        # value = eval(str(value))
-        tmp_cmd_line_case = []
-
-        # positional arguments are stored in a list, or it is a list of previous rules
-        if type(value) == list:
-            for cmd in cmd_line_case:
-                for elm in value:
-                    if elm.strip(":") in dct_current_argument_combinations_by_rule.keys():
-                        # if this is a reference to a previous rule, then substitute here the content of the rule
-                        previous_rule_name = elm.strip(":")
-                        to_add_cmd_lines = dct_current_argument_combinations_by_rule[previous_rule_name]
-                        tmp_cmd_line_case.extend(add_previous_rule_to_current_cmd(cmd, to_add_cmd_lines))
-                    else:
-                        tmp_cmd_line_case.append(" ".join([cmd, elm]).strip())
-
-        # keyword arguments are stored in a dict, ordered because yaml keep the ordering
-        elif type(value) == OrderedDict:
-
-            for cmd in cmd_line_case:
-
-                idx_value_arg = 0
-                len_value_args = -1
-                # each item value in the dict must be an iterable with constant length
-                # create command lines that takes pairs of items but not the combination of them
-                while True:
-                    cmd_line = ""
-
-                    for key_arg, raw_value_arg in value.items():
-                        # there is a lot of computation being repeated between iteration here but it shouldn't
-                        # cost so much
-                        formated_value_arg = (f"" + str(raw_value_arg)).format(LAZYFILE=LAZYFILENAME)
-                        iterable_value_arg = eval(str(formated_value_arg))
-
-                        # check if the number of coefficients is consistent
-                        if len_value_args == -1:
-                            len_value_args = len(iterable_value_arg)
-                        else:
-                            try:
-                                assert len_value_args == len(iterable_value_arg)
-                            except AssertionError:
-                                raise ValueError(f"In dict with multiple entries, all entries must have the same number of elements."
-                                                 f"len({iterable_value_arg}) == {len(iterable_value_arg)} != {len_value_args}")
-
-                        curr_value_iter = iterable_value_arg[idx_value_arg]
-                        cmd_line += str(key_arg) + " " + str(curr_value_iter) + " "
-
-                    tmp_cmd_line_case.append(" ".join([cmd, cmd_line]).strip())
-                    idx_value_arg += 1
-
-                    if idx_value_arg >= len_value_args:
-                        break
-
-        # in case there is only
-        elif type(value) == str:
-            raise NotImplementedError("Sould make evaluation here")
-
-        # in case it is a reference to an other (previous) rule
-        elif value is None:
-            try:
-                to_add_cmd_lines = dct_current_argument_combinations_by_rule[key]
-            except KeyError:
-                raise KeyError(
-                    "{} is referenced in {} but doesnt exist. Make sure it is defined BEFORE the section {}".format(key,
-                                                                                                                    rulename,
-                                                                                                                    rulename))
-
-            for cmd in cmd_line_case:
-                tmp_cmd_line_case.extend(add_previous_rule_to_current_cmd(cmd, to_add_cmd_lines))
-
-        else:
-            raise Exception
-
-        # new argument combinations have been created from the previous ones, and now they replace them
-        cmd_line_case = tmp_cmd_line_case
-
-    return cmd_line_case
-
-
-def build_cmd(dict_arg):
-    cmd_lines = []
-    try:
-        todo_cmd_lines = dict_arg["all"].keys()
-    except KeyError:
-        raise KeyError("There should be a rule 'all'")
-
-    assert list(dict_arg.keys())[0] == "all"
-
-    dct_argument_combinations_by_rule = {}
-    all_rule_names = list(dict_arg.keys())[1:]
-    for rulename in all_rule_names:
-        # for each rule, build the list of argument combinations which it describes
-        rule_content = dict_arg[rulename]
-        lst_arguments_combinations_for_rule = build_arguments_combinations_of_rule(rulename, rule_content, dct_argument_combinations_by_rule)
-        dct_argument_combinations_by_rule[rulename] = lst_arguments_combinations_for_rule
-
-    for todo_cmd_line in todo_cmd_lines:
-        cmd_lines.extend(dct_argument_combinations_by_rule[todo_cmd_line])
-
-    return cmd_lines
+# todo specify external modules (ex numpy/maths) in the yaml file
 
 
 def ordered_load(stream, Loader=yaml.Loader, object_pairs_hook=OrderedDict):
@@ -177,16 +58,142 @@ def ordered_load(stream, Loader=yaml.Loader, object_pairs_hook=OrderedDict):
     return yaml.load(stream, OrderedLoader)
 
 
+class LazygridParser:
+    LAZYFILENAME = None
+
+    def __init__(self, path):
+        self.LAZYFILENAME = "/".join(path.split("/")[-3:]).split(".")[0]
+        with open(path) as f:
+            self.dataMap = ordered_load(f)
+        self.final_cmd_lines = []
+        self.dct_argument_combinations_by_rule = defaultdict(lambda: [""])
+
+        self.build_cmd()
+
+    @staticmethod
+    def add_previous_rule_to_current_cmd(current_cmd, previous_rule_cmd_lines):
+        tmp_cmd_line_case = []
+        for cmd_line_to_add in previous_rule_cmd_lines:
+            tmp_cmd_line_case.append(" ".join([current_cmd, cmd_line_to_add]))
+        return tmp_cmd_line_case
+
+    def _parse_value_type_list(self, value, cmd):
+        tmp_cmd_line_case = []
+        for elm in value:
+            stripped_elm = elm.strip(":")
+            if self.dct_argument_combinations_by_rule[stripped_elm] != [""]: # this is equivalent to say 'if the rule exists' but handle defaultdict
+                # if this is a reference to a previous rule, then substitute here the content of the rule
+                previous_rule_name = stripped_elm
+                to_add_cmd_lines = self.dct_argument_combinations_by_rule[previous_rule_name]
+                tmp_cmd_line_case.extend(self.add_previous_rule_to_current_cmd(cmd, to_add_cmd_lines))
+            else:
+                tmp_cmd_line_case.append(" ".join([cmd, elm]).strip())
+        return tmp_cmd_line_case
+
+    def _parse_value_type_ordereddict(self, value, cmd):
+        tmp_cmd_line_case = []
+        idx_value_arg = 0
+        len_value_args = -1
+        # each item value in the dict must be an iterable with constant length
+        # create command lines that takes pairs of items but not the combination of them
+        while True:
+            cmd_line = ""
+
+            for key_arg, raw_value_arg in value.items():
+                # there is a lot of computation being repeated between iteration here but it shouldn't
+                # cost so much
+                formated_value_arg = (f"" + str(raw_value_arg)).format(LAZYFILE=self.LAZYFILENAME)
+                iterable_value_arg = eval(str(formated_value_arg))
+
+                # check if the number of coefficients is consistent
+                if len_value_args == -1:
+                    len_value_args = len(iterable_value_arg)
+                else:
+                    try:
+                        assert len_value_args == len(iterable_value_arg)
+                    except AssertionError:
+                        raise ValueError(
+                            f"In dict with multiple entries, all entries must have the same number of elements."
+                            f"len({iterable_value_arg}) == {len(iterable_value_arg)} != {len_value_args}")
+
+                curr_value_iter = iterable_value_arg[idx_value_arg]
+                cmd_line += str(key_arg) + " " + str(curr_value_iter) + " "
+
+            tmp_cmd_line_case.append(" ".join([cmd, cmd_line]).strip())
+            idx_value_arg += 1
+
+            if idx_value_arg >= len_value_args:
+                break
+
+        return tmp_cmd_line_case
+
+    def build_arguments_combinations_of_rule(self, rulename, rule_content):
+        # the initial argument combination is just the empty argument combination
+        # this will contain all the "sub command lines" of the rule
+        for key, value in rule_content.items():
+            # each new item in the rule will be appended to all
+            # the previously constructed argument combinations of the rule
+
+            # value = eval(str(value))
+            tmp_cmd_line_case = []
+            for cmd in self.dct_argument_combinations_by_rule[rulename]:
+                # positional arguments are stored in a list, or it is a list of previous rules
+                if type(value) == list:
+                    tmp_cmd_line_case.extend(self._parse_value_type_list(value, cmd))
+                # keyword arguments are stored in a dict, ordered because yaml keep the ordering
+                elif type(value) == OrderedDict:
+                    tmp_cmd_line_case.extend(self._parse_value_type_ordereddict(value, cmd))
+
+                # in case there is only
+                elif type(value) == str:
+                    raise NotImplementedError("Sould make evaluation here")
+
+                # in case it is a reference to an other (previous) rule
+                elif value is None:
+                    try:
+                        to_add_cmd_lines = self.dct_argument_combinations_by_rule[key]
+                    except KeyError:
+                        raise KeyError(
+                            "{} is referenced in {} but doesnt exist. Make sure it is defined BEFORE the section {}".format(key,
+                                                                                                                            rulename,
+                                                                                                                            rulename))
+
+                    tmp_cmd_line_case.extend(self.add_previous_rule_to_current_cmd(cmd, to_add_cmd_lines))
+
+                else:
+                    raise Exception
+
+            # new argument combinations have been created from the previous ones, and now they replace them
+            self.dct_argument_combinations_by_rule[rulename] = tmp_cmd_line_case
+
+    def build_cmd(self):
+        try:
+            todo_cmd_lines = self.dataMap["all"].keys()
+        except KeyError:
+            raise KeyError("There should be a rule 'all'")
+
+        assert list(self.dataMap.keys())[0] == "all"
+
+        all_rule_names = list(self.dataMap.keys())[1:]
+        for rulename in all_rule_names:
+            # for each rule, build the list of argument combinations which it describes
+            rule_content = self.dataMap[rulename]
+            self.build_arguments_combinations_of_rule(rulename, rule_content)
+
+        for todo_cmd_line in todo_cmd_lines:
+            self.final_cmd_lines.extend(self.dct_argument_combinations_by_rule[todo_cmd_line])
+
+    def print(self):
+        for line in self.final_cmd_lines:
+            print(line)
+
+
 def main():
-    global LAZYFILENAME
     arguments = docopt(__doc__)
     abspath_lazyfile = os.path.abspath(arguments["--lazyfile"])
-    LAZYFILENAME = "/".join(abspath_lazyfile.split("/")[-3:]).split(".")[0]
-    with open(abspath_lazyfile) as f:
-        dataMap = ordered_load(f)
-    final_cmd_lines = build_cmd(dataMap)
-    for line in final_cmd_lines:
-        print(line)
+    lazyfile_parser = LazygridParser(abspath_lazyfile)
+    lazyfile_parser.print()
+
 
 if __name__ == "__main__":
     main()
